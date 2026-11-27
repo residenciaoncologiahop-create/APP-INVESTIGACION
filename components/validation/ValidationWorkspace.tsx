@@ -347,14 +347,14 @@ export function ValidationWorkspace({
     return (
       <Card className="p-10 text-center">
         <p className="text-base font-semibold text-slate-800">
-          No hay casos cargados para validar.
+          No hay casos cargados para revisar.
         </p>
         <p className="mt-1 text-sm text-slate-500">
-          Carga historias clínicas y ejecuta la extracción en el Paso 2 para comenzar la
-          auditoría Human-in-the-Loop.
+          Cargá historias clínicas y ejecutá la extracción en el Paso 2 para comenzar la
+          revisión médica.
         </p>
         <Button className="mt-4" onClick={onGoToIngestion}>
-          Ir a Paso 2: Cargar HCD
+          Ir a Paso 2: Cargar historias clínicas
         </Button>
       </Card>
     );
@@ -364,6 +364,16 @@ export function ValidationWorkspace({
 
   return (
     <div className="space-y-4">
+      <div>
+        <h2 className="text-xl font-semibold text-slate-900">
+          3. Revisar y validar casos
+        </h2>
+        <p className="mt-0.5 text-sm text-slate-600">
+          Revisión médica asistida: contrastá cada dato extraído con la frase exacta de la
+          historia clínica y aprobá el caso.
+        </p>
+      </div>
+
       {/* Barra superior de selección de caso y aprobación */}
       <Card className="p-3.5">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -476,7 +486,7 @@ export function ValidationWorkspace({
         </div>
       </Card>
 
-      {/* Split-Screen Principal */}
+      {/* Vista comparativa principal */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
         {/* PANEL IZQUIERDO: Visor de Historia Clínica Multi-Documento con Resaltado */}
         <Card className="flex flex-col overflow-hidden lg:col-span-6 h-[calc(100vh-225px)] min-h-[540px]">
@@ -492,7 +502,7 @@ export function ValidationWorkspace({
                 className="inline-flex items-center gap-1 rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-medium text-slate-600 hover:bg-slate-100 cursor-pointer"
               >
                 <Eye className="h-3 w-3" />
-                {showOriginalText ? "Viendo Original (Local)" : "Viendo Redactado (PII)"}
+                {showOriginalText ? "Viendo texto original" : "Viendo texto protegido"}
               </button>
             </div>
 
@@ -585,8 +595,8 @@ export function ValidationWorkspace({
                 Variables Extraídas ({variables.length})
               </h3>
               <p className="text-[11px] text-slate-500">
-                Haz clic en cualquier variable para localizar y resaltar su cita verbatim en el
-                panel izquierdo.
+                Hacé clic en cualquier variable para localizar y resaltar la frase exacta en la
+                historia clínica.
               </p>
             </div>
             {/* Leyenda semáforo */}
@@ -807,6 +817,12 @@ export function ValidationWorkspace({
                             <Info className="h-3.5 w-3.5 shrink-0 text-sky-600 mt-0.5" />
                           )}
                           <span>{rec.reasoning}</span>
+                        </p>
+                      )}
+
+                      {rec?.modelUsed && (
+                        <p className="mt-1 text-[10px] text-slate-400">
+                          Origen: {rec.modelUsed}
                         </p>
                       )}
                     </div>

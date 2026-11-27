@@ -5,7 +5,8 @@ import {
   ArrowDown,
   ArrowUp,
   BookOpen,
-  Code2,
+  ChevronDown,
+  ChevronRight,
   Download,
   Pencil,
   Plus,
@@ -78,7 +79,7 @@ export function CodebookModule({
   onGoNextStep,
 }: CodebookModuleProps) {
   const [modalOpen, setModalOpen] = useState(false);
-  const [schemaModalOpen, setSchemaModalOpen] = useState(false);
+  const [advancedSchemaOpen, setAdvancedSchemaOpen] = useState(false);
   const [form, setForm] = useState<VariableFormState>(EMPTY_FORM);
   const [sectionFilter, setSectionFilter] = useState<string>("all");
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -89,9 +90,9 @@ export function CodebookModule({
   }, [variables, sectionFilter]);
 
   const jsonSchemaPreview = useMemo(() => {
-    if (!schemaModalOpen) return "";
+    if (!advancedSchemaOpen) return "";
     return JSON.stringify(buildGeminiResponseSchema(variables), null, 2);
-  }, [schemaModalOpen, variables]);
+  }, [advancedSchemaOpen, variables]);
 
   function openNewVariable() {
     setForm(EMPTY_FORM);
@@ -307,27 +308,22 @@ export function CodebookModule({
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h2 className="text-xl font-semibold text-slate-900">
-            1. Constructor de Diccionario de Variables (Codebook)
+            1. Variables del estudio
           </h2>
           <p className="mt-1 text-sm text-slate-600">
-            Define exactamente qué variables extraerá la IA, su tipo de dato, categorías cerradas e
-            instrucciones clínicas. Este diccionario se compila automáticamente en un{" "}
-            <span className="font-medium text-slate-800">JSON Schema estricto</span> para Gemini.
+            Definí qué datos clínicos querés recolectar de cada historia, sus categorías
+            permitidas y los criterios médicos para la extracción estructurada.
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => setSchemaModalOpen(true)} disabled={variables.length === 0}>
-            <Code2 className="h-3.5 w-3.5" />
-            Ver JSON Schema
-          </Button>
           <Button variant="outline" size="sm" onClick={handleExportCodebook} disabled={variables.length === 0}>
             <Download className="h-3.5 w-3.5" />
-            Exportar JSON
+            Exportar variables
           </Button>
           <Button variant="outline" size="sm" onClick={() => fileInputRef.current?.click()}>
             <Upload className="h-3.5 w-3.5" />
-            Importar JSON
+            Importar variables
           </Button>
           <input
             ref={fileInputRef}
@@ -441,10 +437,10 @@ export function CodebookModule({
               <thead className="border-b border-slate-200 bg-slate-50 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                 <tr>
                   <th className="px-3 py-2.5 w-16">Orden</th>
-                  <th className="px-3 py-2.5">Variable / Nombre técnico</th>
+                  <th className="px-3 py-2.5">Variable / Nombre de columna</th>
                   <th className="px-3 py-2.5">Sección</th>
                   <th className="px-3 py-2.5">Tipo y Categorías</th>
-                  <th className="px-3 py-2.5">Instrucción Clínica (Prompt IA)</th>
+                  <th className="px-3 py-2.5">Criterio clínico de extracción</th>
                   <th className="px-3 py-2.5 w-20 text-center">Faltante</th>
                   <th className="px-3 py-2.5 w-24 text-right">Acciones</th>
                 </tr>
@@ -551,16 +547,44 @@ export function CodebookModule({
         {variables.length > 0 && (
           <div className="flex items-center justify-between border-t border-slate-200 bg-slate-50 px-4 py-3">
             <p className="text-xs text-slate-600">
-              Diccionario listo con <strong>{variables.length}</strong> columnas. Si agregas
-              nuevas variables después de procesar pacientes, podrás re-extraer únicamente las
-              columnas nuevas.
+              Variables listas: <strong>{variables.length}</strong> columnas. Si agregás
+              nuevas variables más adelante, podrás extraer únicamente las columnas nuevas.
             </p>
             <Button size="sm" onClick={onGoNextStep}>
-              Continuar a Paso 2: Cargar HCD →
+              Continuar a Paso 2: Cargar historias clínicas →
             </Button>
           </div>
         )}
       </Card>
+
+      {/* Desplegable cerrado por defecto para ver formato técnico avanzado */}
+      {variables.length > 0 && (
+        <Card className="overflow-hidden">
+          <button
+            type="button"
+            onClick={() => setAdvancedSchemaOpen((v) => !v)}
+            className="flex w-full items-center justify-between px-4 py-2.5 text-left text-xs font-medium text-slate-600 hover:bg-slate-50 cursor-pointer"
+          >
+            <span>Ver formato técnico avanzado</span>
+            {advancedSchemaOpen ? (
+              <ChevronDown className="h-4 w-4 text-slate-400" />
+            ) : (
+              <ChevronRight className="h-4 w-4 text-slate-400" />
+            )}
+          </button>
+          {advancedSchemaOpen && (
+            <div className="border-t border-slate-200 p-4">
+              <p className="mb-2 text-xs text-slate-500">
+                Estructura técnica generada automáticamente a partir de las variables del estudio
+                para asegurar respuestas consistentes.
+              </p>
+              <pre className="max-h-[50vh] overflow-auto rounded-lg bg-slate-900 p-4 font-mono text-xs text-sky-200">
+                {jsonSchemaPreview}
+              </pre>
+            </div>
+          )}
+        </Card>
+      )}
 
       {/* Modal Crear / Editar Variable */}
       <Modal
@@ -595,7 +619,7 @@ export function CodebookModule({
 
             <div>
               <label className="mb-1 block text-xs font-medium text-slate-700">
-                Nombre técnico (columna R/SPSS/CSV) *
+                Nombre de columna (Excel / R / SPSS) *
               </label>
               <Input
                 required
@@ -704,7 +728,7 @@ export function CodebookModule({
 
           <div>
             <label className="mb-1 block text-xs font-medium text-slate-700">
-              Instrucción clínica para la IA (Prompt de variable)
+              Criterio clínico para la extracción
             </label>
             <Textarea
               rows={3}
@@ -715,9 +739,9 @@ export function CodebookModule({
               }
             />
             <p className="mt-1 text-[11px] text-slate-500">
-              La IA tiene prohibido inferir o completar por probabilidad clínica: si no hay
-              evidencia textual explícita, devolverá <code className="font-mono">null</code>{" "}
-              ({form.missingValue || "NR"}).
+              La IA no asume ni completa datos por probabilidad clínica: si no hay evidencia
+              explícita en la historia clínica, quedará registrado como dato faltante (
+              {form.missingValue || "NR"}).
             </p>
           </div>
 
@@ -734,19 +758,6 @@ export function CodebookModule({
             </Button>
           </div>
         </form>
-      </Modal>
-
-      {/* Modal Preview JSON Schema */}
-      <Modal
-        open={schemaModalOpen}
-        onClose={() => setSchemaModalOpen(false)}
-        title="JSON Schema Dinámico para Google Gemini (Structured Outputs)"
-        subtitle="Esquema compilado automáticamente a partir de tu diccionario de variables."
-        maxWidth="max-w-3xl"
-      >
-        <pre className="max-h-[60vh] overflow-auto rounded-lg bg-slate-900 p-4 font-mono text-xs text-sky-200">
-          {jsonSchemaPreview}
-        </pre>
       </Modal>
     </div>
   );

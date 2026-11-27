@@ -280,9 +280,9 @@ export function AnalyticsExportModule({
             4. Tabla Maestra, Casuística Rápida y Exportación Científica
           </h2>
           <p className="mt-1 text-sm text-slate-600">
-            Revisa la matriz completa de la cohorte, explora estadística descriptiva y
-            missingness, calcula intervalos de supervivencia y exporta datasets listos para R,
-            SPSS, Jamovi o Stata.
+            Revisá la matriz completa de la cohorte, explorá estadística descriptiva y datos
+            faltantes, calculá intervalos de supervivencia y exportá bases de datos listas para
+            Excel, R, SPSS, Jamovi o Stata.
           </p>
         </div>
 
@@ -410,7 +410,7 @@ export function AnalyticsExportModule({
                 <option value="pending">Pendientes</option>
               </select>
               <span className="text-[11px] text-slate-400">
-                (Doble clic en cualquier celda para editar inline)
+                (Doble clic en cualquier celda para editar)
               </span>
             </div>
           </div>
@@ -474,7 +474,7 @@ export function AnalyticsExportModule({
                             type="button"
                             onClick={() => onOpenValidation(patient.id)}
                             className="text-sky-700 hover:underline cursor-pointer"
-                            title="Abrir en Workspace de Validación"
+                            title="Abrir para revisión médica"
                           >
                             {patient.studyCode}
                           </button>
@@ -726,13 +726,14 @@ export function AnalyticsExportModule({
             )}
           </Card>
 
-          {/* Mapa de Datos Faltantes (Missingness por Variable) */}
+          {/* Mapa de Datos Faltantes por Variable */}
           <Card className="p-4">
             <h3 className="text-sm font-semibold text-slate-900">
-              Mapa de Completitud y Datos Faltantes (Missingness por Variable)
+              Mapa de completitud y datos faltantes por variable
             </h3>
             <p className="mt-0.5 text-xs text-slate-500">
-              Porcentaje de registros completos vs faltantes por columna del diccionario.
+              Porcentaje de registros completos frente a datos faltantes por cada variable del
+              estudio.
             </p>
             <div className="mt-4 h-64 w-full">
               <ResponsiveContainer width="100%" height="100%">
@@ -763,7 +764,7 @@ export function AnalyticsExportModule({
                   />
                   <Bar
                     dataKey="faltantes"
-                    name="% Faltantes (Missing)"
+                    name="% Datos faltantes"
                     stackId="a"
                     fill="#e2e8f0"
                     radius={[3, 3, 0, 0]}

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import {
   Activity,
@@ -11,11 +11,13 @@ import {
   Sparkles,
   XCircle,
 } from "lucide-react";
-import { createStudy, db } from "@/lib/db";
+import { createStudy, db, getAppSettings } from "@/lib/db";
+import { fetchAvailableModels } from "@/lib/extraction-client";
 import { seedDemoStudy } from "@/lib/templates";
 import type {
   ClinicalDocument,
   ExtractionRecord,
+  ModelsDiscoveryResponse,
   Patient,
   Study,
   StudyVariable,
@@ -40,6 +42,29 @@ export default function HomePage() {
   const [focusedPatientId, setFocusedPatientId] = useState<string | null>(null);
   const [toast, setToast] = useState<ToastMessage | null>(null);
   const [loadingDemo, setLoadingDemo] = useState(false);
+
+  const [modelsDiscovery, setModelsDiscovery] = useState<ModelsDiscoveryResponse | null>(null);
+  const [checkingModels, setCheckingModels] = useState<boolean>(true);
+  const [demoModeEnabled, setDemoModeEnabled] = useState<boolean>(false);
+
+  const refreshAiStatus = useCallback(async (manualKeyOverride?: string) => {
+    setCheckingModels(true);
+    try {
+      const currentSettings = await getAppSettings();
+      setDemoModeEnabled(currentSettings.useDemoMode);
+      const keyToTest =
+        manualKeyOverride !== undefined ? manualKeyOverride : currentSettings.geminiApiKey;
+      const res = await fetchAvailableModels(keyToTest);
+      setModelsDiscovery(res);
+      return res;
+    } finally {
+      setCheckingModels(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshAiStatus();
+  }, [refreshAiStatus]);
 
   const studies = useLiveQuery(
     () => db.studies.orderBy("createdAt").reverse().toArray(),
@@ -111,7 +136,7 @@ export default function HomePage() {
       setActiveStudyId(demo.id);
       setActiveStep("validation");
       notify(
-        "Estudio de ejemplo cargado con 12 variables y 3 casos ficticios listos para auditar.",
+        "Estudio de ejemplo cargado con 12 variables y 3 casos ficticios listos para revisar.",
         "success"
       );
     } finally {
@@ -127,7 +152,7 @@ export default function HomePage() {
     });
     setActiveStudyId(created.id);
     setActiveStep("codebook");
-    notify("Estudio creado. Comienza cargando variables o una plantilla oncológica.", "success");
+    notify("Estudio creado. Comenzá cargando variables o una plantilla oncológica.", "success");
   }
 
   const sidebarCounts = useMemo(
@@ -162,6 +187,10 @@ export default function HomePage() {
             setFocusedPatientId(null);
           }}
           onNotify={notify}
+          modelsDiscovery={modelsDiscovery}
+          checkingModels={checkingModels}
+          demoModeEnabled={demoModeEnabled}
+          onRefreshAiStatus={refreshAiStatus}
         />
 
         {/* Notificación flotante */}
@@ -201,9 +230,9 @@ export default function HomePage() {
                   Plataforma de Extracción de Datos Clínicos para Oncología
                 </h2>
                 <p className="mx-auto mt-2 max-w-xl text-sm leading-relaxed text-slate-600">
-                  Transforma historias clínicas no estructuradas (PDF, DOCX, TXT) en bases de
-                  datos estructuradas, seudoanonimizadas y auditables con trazabilidad
-                  verbatim, listas para análisis en R, SPSS, Jamovi o Stata.
+                  Transformá historias clínicas (PDF, Word o texto) en bases de datos
+                  estructuradas, con datos del paciente protegidos y cita textual exacta de cada
+                  dato, listas para analizar en Excel, R, SPSS, Jamovi o Stata.
                 </p>
 
                 <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
@@ -211,7 +240,7 @@ export default function HomePage() {
                     <FlaskConical className="h-4 w-4" />
                     {loadingDemo
                       ? "Cargando estudio de ejemplo..."
-                      : "Cargar Estudio de Ejemplo (12 vars · 3 HCD)"}
+                      : "Cargar Estudio de Ejemplo (12 vars · 3 historias)"}
                   </Button>
                   <Button
                     size="lg"
@@ -229,18 +258,18 @@ export default function HomePage() {
                       1. Rigor Científico
                     </p>
                     <p className="mt-1 text-xs text-slate-600">
-                      JSON Schema estricto + prohibición de inferencia: cada dato incluye cita
-                      textual exacta y semáforo de confianza.
+                      Extracción estructurada sin suposiciones: cada dato incluye la frase exacta
+                      de la historia clínica y un semáforo de confianza.
                     </p>
                   </div>
                   <div className="rounded-lg border border-slate-200 bg-slate-50 p-3.5">
                     <p className="text-xs font-semibold text-slate-900 flex items-center gap-1">
                       <ShieldCheck className="h-3.5 w-3.5 text-emerald-600" />
-                      2. Privacidad Local-First
+                      2. Guardado en este equipo
                     </p>
                     <p className="mt-1 text-xs text-slate-600">
-                      Tus estudios viven en IndexedDB. El filtro redacta DNI, nombres y HC
-                      antes de invocar a Gemini.
+                      Tus estudios se guardan únicamente en este equipo. El filtro oculta DNI,
+                      nombres y N° de historia antes del análisis con IA.
                     </p>
                   </div>
                   <div className="rounded-lg border border-slate-200 bg-slate-50 p-3.5">
@@ -248,8 +277,8 @@ export default function HomePage() {
                       3. Listo para Publicar
                     </p>
                     <p className="mt-1 text-xs text-slate-600">
-                      Calcula intervalos Kaplan-Meier y exporta Excel de 3 hojas (Base +
-                      Diccionario + Auditoría IA) o CSV UTF-8.
+                      Calcula intervalos de supervivencia y exporta Excel de 3 hojas (Base +
+                      Diccionario + Auditoría) o CSV listo para estadística.
                     </p>
                   </div>
                 </div>
@@ -273,6 +302,8 @@ export default function HomePage() {
                   patients={patients}
                   documents={documents}
                   extractions={extractions}
+                  modelsDiscovery={modelsDiscovery}
+                  demoModeEnabled={demoModeEnabled}
                   onNotify={notify}
                   onGoToValidation={(pid) => {
                     if (pid) setFocusedPatientId(pid);

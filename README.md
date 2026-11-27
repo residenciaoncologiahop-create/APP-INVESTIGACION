@@ -77,3 +77,9 @@ npm run start
 ```
 
 Luego abre `http://localhost:3000` en tu navegador.
+
+---
+
+## Limitaciones en Despliegue Serverless (Vercel)
+
+- **Tamaño máximo de solicitud (`POST /api/extract`): 4.5 MB.** Las funciones serverless de Vercel imponen un límite estricto de **4.5 MB** en el cuerpo HTTP de cada solicitud. Dado que `/api/extract` recibe en un único payload JSON las variables del estudio y los textos extraídos de los documentos de cada paciente, una solicitud cuyo cuerpo supere 4.5 MB será rechazada por Vercel (HTTP `413`) antes de invocar la función. En esta versión no se implementa almacenamiento externo ni fragmentación de solicitudes.

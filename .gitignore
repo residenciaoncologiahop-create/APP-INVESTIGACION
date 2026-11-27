@@ -21,7 +21,40 @@ yarn-error.log*
 
 # env files
 .env
-.env*.local
+.env.*
+!.env.example
+
+# local databases
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# credentials & private keys
+*.key
+*.p12
+*.pfx
+*.jks
+*credentials*.json
+*secret*.json
+service-account*.json
+
+# clinical records & test documents
+*.pdf
+*.docx
+*.xlsx
+*.csv
+
+# temporary files
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+/tmp/
+/temp/
 
 # typescript
 *.tsbuildinfo

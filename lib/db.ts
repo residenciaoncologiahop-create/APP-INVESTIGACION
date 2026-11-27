@@ -1,9 +1,6 @@
 import Dexie, { type EntityTable } from "dexie";
 import {
-  DEFAULT_GEMINI_MODEL,
   DEFAULT_REDACTION_RULES,
-  DEPRECATED_GEMINI_MODELS,
-  normalizeGeminiModel,
   type AppSetting,
   type AppSettingsState,
   type ClinicalDocument,
@@ -135,33 +132,19 @@ export async function getAppSettings(): Promise<AppSettingsState> {
   const rows = await db.settings.toArray();
   const map = new Map(rows.map((r) => [r.key, r.value]));
 
-  const rawDefaultModel = (map.get("defaultModel") ?? "").trim();
-  const rawCustomModel = (map.get("customModel") ?? "").trim();
-
-  // Migración automática en IndexedDB si había modelos deprecados guardados (2.5 Flash/Pro)
-  const migratedEntries: AppSetting[] = [];
-  let defaultModel = normalizeGeminiModel(rawDefaultModel);
-  if (rawDefaultModel && DEPRECATED_GEMINI_MODELS.has(rawDefaultModel)) {
-    defaultModel = DEFAULT_GEMINI_MODEL;
-    migratedEntries.push({ key: "defaultModel", value: DEFAULT_GEMINI_MODEL });
-  }
-
-  let customModel = rawCustomModel;
-  if (rawCustomModel && DEPRECATED_GEMINI_MODELS.has(rawCustomModel)) {
-    customModel = "";
-    migratedEntries.push({ key: "customModel", value: "" });
-  }
-
-  if (migratedEntries.length > 0) {
-    await db.settings.bulkPut(migratedEntries);
-  }
+  const defaultModel = (map.get("defaultModel") ?? "").trim();
+  const fallbackModel = (map.get("fallbackModel") ?? "").trim();
+  const customModel = (map.get("customModel") ?? "").trim();
+  const useDemoMode = map.get("useDemoMode") === "true";
 
   const delay = Number(map.get("rateLimitDelayMs") ?? "750");
   return {
     geminiApiKey: map.get("geminiApiKey") ?? "",
     defaultModel,
+    fallbackModel,
     customModel,
     rateLimitDelayMs: Number.isFinite(delay) && delay >= 0 ? delay : 750,
+    useDemoMode,
   };
 }
 
@@ -175,21 +158,28 @@ export async function saveAppSettings(
   if (partial.defaultModel !== undefined) {
     entries.push({
       key: "defaultModel",
-      value: normalizeGeminiModel(partial.defaultModel),
+      value: partial.defaultModel.trim(),
+    });
+  }
+  if (partial.fallbackModel !== undefined) {
+    entries.push({
+      key: "fallbackModel",
+      value: partial.fallbackModel.trim(),
     });
   }
   if (partial.customModel !== undefined) {
-    const trimmed = partial.customModel.trim();
-    const cleaned =
-      trimmed && DEPRECATED_GEMINI_MODELS.has(trimmed)
-        ? DEFAULT_GEMINI_MODEL
-        : trimmed;
-    entries.push({ key: "customModel", value: cleaned });
+    entries.push({ key: "customModel", value: partial.customModel.trim() });
   }
   if (partial.rateLimitDelayMs !== undefined) {
     entries.push({
       key: "rateLimitDelayMs",
       value: String(partial.rateLimitDelayMs),
+    });
+  }
+  if (partial.useDemoMode !== undefined) {
+    entries.push({
+      key: "useDemoMode",
+      value: partial.useDemoMode ? "true" : "false",
     });
   }
   if (entries.length > 0) {

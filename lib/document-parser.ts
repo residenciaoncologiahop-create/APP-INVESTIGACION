@@ -1,6 +1,11 @@
 "use client";
 
-import type { DocumentCategory } from "./types";
+import type { ClinicalDocument, DocumentCategory } from "./types";
+
+export const MIN_SELECTABLE_TEXT_LENGTH = 30;
+
+export const SCANNED_PDF_WARNING =
+  "Este PDF parece una imagen escaneada sin texto seleccionable";
 
 export interface ParsedClinicalFile {
   filename: string;
@@ -9,6 +14,36 @@ export interface ParsedClinicalFile {
   category: DocumentCategory;
   text: string;
   pageCount?: number;
+  extractedCharCount: number;
+  isLowTextPdf: boolean;
+  warning?: string;
+}
+
+export function countMeaningfulClinicalChars(rawText: string): number {
+  return (rawText || "")
+    .replace(/---\s*Página siguiente\s*---/g, "")
+    .replace(/\s+/g, " ")
+    .trim().length;
+}
+
+export function evaluateExtractedPdfText(rawText: string): {
+  extractedCharCount: number;
+  isLowTextPdf: boolean;
+  warning?: string;
+} {
+  const extractedCharCount = countMeaningfulClinicalChars(rawText);
+  const isLowTextPdf = extractedCharCount < MIN_SELECTABLE_TEXT_LENGTH;
+  return {
+    extractedCharCount,
+    isLowTextPdf,
+    warning: isLowTextPdf ? SCANNED_PDF_WARNING : undefined,
+  };
+}
+
+export function isDocumentLowTextPdf(doc: Pick<ClinicalDocument, "fileType" | "rawText" | "isLowTextPdf">): boolean {
+  if (doc.fileType !== "pdf") return false;
+  if (doc.isLowTextPdf === true) return true;
+  return countMeaningfulClinicalChars(doc.rawText) < MIN_SELECTABLE_TEXT_LENGTH;
 }
 
 export function inferDocumentCategory(filename: string): DocumentCategory {
@@ -31,7 +66,13 @@ export function inferPatientGroupKey(filename: string): string {
   return stem;
 }
 
-async function parsePdfFile(file: File): Promise<{ text: string; pageCount: number }> {
+async function parsePdfFile(file: File): Promise<{
+  text: string;
+  pageCount: number;
+  extractedCharCount: number;
+  isLowTextPdf: boolean;
+  warning?: string;
+}> {
   const pdfjsLib = await import("pdfjs-dist");
   if (typeof window !== "undefined") {
     pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
@@ -66,12 +107,15 @@ async function parsePdfFile(file: File): Promise<{ text: string; pageCount: numb
   }
 
   const combined = pageTexts.join("\n\n--- Página siguiente ---\n\n").trim();
-  if (!combined) {
-    throw new Error(
-      `El PDF "${file.name}" no contiene texto seleccionable (podría ser un escaneo sin OCR).`
-    );
-  }
-  return { text: combined, pageCount: pdf.numPages };
+  const evaluation = evaluateExtractedPdfText(combined);
+
+  // Conservamos el documento aunque tenga menos de 30 caracteres para que el médico
+  // vea la alerta de PDF escaneado en la tarjeta del paciente (sin afirmar OCR).
+  return {
+    text: combined,
+    pageCount: pdf.numPages,
+    ...evaluation,
+  };
 }
 
 async function parseDocxFile(file: File): Promise<string> {
@@ -86,7 +130,8 @@ export async function parseClinicalFile(file: File): Promise<ParsedClinicalFile>
   const category = inferDocumentCategory(file.name);
 
   if (ext === "pdf") {
-    const { text, pageCount } = await parsePdfFile(file);
+    const { text, pageCount, extractedCharCount, isLowTextPdf, warning } =
+      await parsePdfFile(file);
     return {
       filename: file.name,
       fileType: "pdf",
@@ -94,13 +139,16 @@ export async function parseClinicalFile(file: File): Promise<ParsedClinicalFile>
       category,
       text,
       pageCount,
+      extractedCharCount,
+      isLowTextPdf,
+      warning,
     };
   }
 
   if (ext === "docx") {
     const text = await parseDocxFile(file);
     if (!text) {
-      throw new Error(`El archivo DOCX "${file.name}" está vacío.`);
+      throw new Error(`El archivo Word "${file.name}" está vacío.`);
     }
     return {
       filename: file.name,
@@ -108,6 +156,8 @@ export async function parseClinicalFile(file: File): Promise<ParsedClinicalFile>
       fileSize: file.size,
       category,
       text,
+      extractedCharCount: countMeaningfulClinicalChars(text),
+      isLowTextPdf: false,
     };
   }
 
@@ -122,10 +172,12 @@ export async function parseClinicalFile(file: File): Promise<ParsedClinicalFile>
       fileSize: file.size,
       category,
       text,
+      extractedCharCount: countMeaningfulClinicalChars(text),
+      isLowTextPdf: false,
     };
   }
 
   throw new Error(
-    `Formato no soportado para "${file.name}". Utiliza archivos .pdf, .docx o .txt.`
+    `Formato no soportado para "${file.name}". Utilizá archivos PDF, Word (.docx) o texto (.txt).`
   );
 }

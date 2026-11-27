@@ -42,24 +42,24 @@ export function AppSidebar({
     {
       id: "codebook",
       num: "1",
-      title: "Diccionario",
-      subtitle: "Variables y JSON Schema",
+      title: "Variables del estudio",
+      subtitle: "Datos a recolectar",
       badge: `${counts.variables} vars`,
       icon: BookOpen,
     },
     {
       id: "ingestion",
       num: "2",
-      title: "Cargar HCD",
-      subtitle: "Redacción PII y Cola IA",
+      title: "Cargar historias clínicas",
+      subtitle: "Protección y extracción",
       badge: `${counts.patients} pac.`,
       icon: UploadCloud,
     },
     {
       id: "validation",
       num: "3",
-      title: "Validar Casos",
-      subtitle: "Auditoría Split-Screen",
+      title: "Revisar y validar casos",
+      subtitle: "Revisión médica asistida",
       badge: `${counts.validated}/${counts.patients}`,
       icon: ClipboardCheck,
     },
@@ -67,8 +67,8 @@ export function AppSidebar({
       id: "analytics",
       num: "4",
       title: "Base y Casuística",
-      subtitle: "Planilla, KM y Export",
-      badge: "XLSX/CSV",
+      subtitle: "Planilla, estadísticas y Excel",
+      badge: "Excel/CSV",
       icon: BarChart3,
     },
   ];
@@ -124,12 +124,12 @@ export function AppSidebar({
               </div>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs font-semibold">
+                  <span className="text-xs font-semibold leading-tight">
                     {step.num}. {step.title}
                   </span>
                   <span
                     className={cn(
-                      "rounded px-1.5 py-0.5 font-mono text-[10px]",
+                      "shrink-0 rounded px-1.5 py-0.5 font-mono text-[10px]",
                       isActive
                         ? "bg-sky-900/60 text-sky-100"
                         : "bg-slate-800 text-slate-400"
@@ -156,11 +156,11 @@ export function AppSidebar({
       <div className="border-t border-slate-800 p-4 text-[11px] text-slate-400">
         <div className="flex items-center gap-1.5 font-medium text-emerald-400">
           <ShieldCheck className="h-3.5 w-3.5" />
-          Privacidad Local-First
+          Guardado en este equipo
         </div>
         <p className="mt-1 leading-relaxed">
-          IndexedDB local + filtro previo de datos filiatorios antes de consultar la API de
-          Gemini.
+          Tus estudios permanecen en este equipo. Los datos identificatorios del paciente se
+          ocultan antes de analizar la historia clínica.
         </p>
       </div>
     </aside>

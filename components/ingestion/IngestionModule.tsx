@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import {
   AlertTriangle,
@@ -19,6 +19,7 @@ import {
   Trash2,
   UploadCloud,
 } from "lucide-react";
+import { formatStoredErrorForDisplay } from "@/lib/ai-errors";
 import {
   allocateNextStudyCode,
   db,
@@ -28,7 +29,9 @@ import {
 } from "@/lib/db";
 import {
   inferPatientGroupKey,
+  isDocumentLowTextPdf,
   parseClinicalFile,
+  SCANNED_PDF_WARNING,
 } from "@/lib/document-parser";
 import {
   runBatchExtraction,
@@ -37,13 +40,11 @@ import {
 import { exportKeyTableCsv } from "@/lib/exporters";
 import { redactClinicalText } from "@/lib/redactor";
 import {
-  DEFAULT_GEMINI_MODEL,
   DOCUMENT_CATEGORY_LABELS,
-  GEMINI_MODEL_PRESETS,
   type ClinicalDocument,
   type DocumentCategory,
   type ExtractionRecord,
-  type GeminiModel,
+  type ModelsDiscoveryResponse,
   type Patient,
   type RedactionRuleConfig,
   type Study,
@@ -65,6 +66,8 @@ interface IngestionModuleProps {
   patients: Patient[];
   documents: ClinicalDocument[];
   extractions: ExtractionRecord[];
+  modelsDiscovery?: ModelsDiscoveryResponse | null;
+  demoModeEnabled?: boolean;
   onNotify: (msg: string, tone?: "info" | "success" | "error") => void;
   onGoToValidation: (patientId?: string) => void;
 }
@@ -94,6 +97,8 @@ export function IngestionModule({
   patients,
   documents,
   extractions,
+  modelsDiscovery,
+  demoModeEnabled,
   onNotify,
   onGoToValidation,
 }: IngestionModuleProps) {
@@ -119,17 +124,8 @@ export function IngestionModule({
   const [pendingDuplicates, setPendingDuplicates] =
     useState<PendingDuplicateReview | null>(null);
 
-  // Cola de procesamiento IA (sincronizada con configuración guardada en IndexedDB)
+  // Configuración guardada en este equipo
   const savedSettings = useLiveQuery(() => getAppSettings(), [], undefined);
-  const [selectedModel, setSelectedModel] = useState<GeminiModel>(DEFAULT_GEMINI_MODEL);
-
-  useEffect(() => {
-    if (!savedSettings) return;
-    const preferred = savedSettings.customModel.trim() || savedSettings.defaultModel;
-    if (preferred) {
-      setSelectedModel(preferred);
-    }
-  }, [savedSettings?.defaultModel, savedSettings?.customModel]);
   const [isRunningQueue, setIsRunningQueue] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const pauseRef = useRef(false);
@@ -346,6 +342,8 @@ export function IngestionModule({
             redactionCount: red.totalRedactions,
             redactionSummary: red.countsByType,
             redactionConfirmed: false,
+            isLowTextPdf: item.isLowTextPdf,
+            extractedCharCount: item.extractedCharCount,
             uploadedAt: now,
           });
           addedDocs += 1;
@@ -399,6 +397,8 @@ export function IngestionModule({
               redactionCount: red.totalRedactions,
               redactionSummary: red.countsByType,
               redactionConfirmed: false,
+              isLowTextPdf: item.isLowTextPdf,
+              extractedCharCount: item.extractedCharCount,
               uploadedAt: now,
             });
             addedDocs += 1;
@@ -406,13 +406,20 @@ export function IngestionModule({
         }
       }
 
+      const scannedCount = parsedItems.filter((item) => item.isLowTextPdf).length;
       const summary =
         addedPatients > 0
-          ? `Se cargaron ${addedDocs} documento(s) en ${addedPatients} nuevo(s) paciente(s) seudoanonimizado(s).`
+          ? `Se cargaron ${addedDocs} documento(s) en ${addedPatients} nuevo(s) paciente(s).`
           : `Se adjuntaron ${addedDocs} documento(s) al paciente seleccionado.`;
+      const scannedNotice =
+        scannedCount > 0
+          ? ` Atención: ${scannedCount} PDF parece una imagen escaneada sin texto seleccionable (se conservó el archivo y se marcó con alerta).`
+          : "";
       onNotify(
-        errors.length ? `${summary} Avisos: ${errors.join("; ")}` : summary,
-        errors.length ? "info" : "success"
+        errors.length
+          ? `${summary}${scannedNotice} Avisos: ${errors.join("; ")}`
+          : `${summary}${scannedNotice}`,
+        errors.length || scannedCount > 0 ? "info" : "success"
       );
     } finally {
       setParsingFiles(false);
@@ -485,14 +492,14 @@ export function IngestionModule({
 
   async function launchExtractionQueue(
     targetPatients: Patient[],
-    opts: { missingVariablesOnly?: boolean } = {}
+    opts: { missingVariablesOnly?: boolean; forceReextract?: boolean } = {}
   ) {
     if (variables.length === 0) {
-      onNotify("Primero define al menos una variable en el Paso 1 (Diccionario).", "error");
+      onNotify("Primero definí al menos una variable en el Paso 1 (Variables del estudio).", "error");
       return;
     }
     if (targetPatients.length === 0) {
-      onNotify("No hay pacientes elegibles para procesar en la cola.", "info");
+      onNotify("No hay pacientes pendientes para analizar.", "info");
       return;
     }
 
@@ -506,20 +513,28 @@ export function IngestionModule({
         study,
         patients: targetPatients,
         variables,
-        modelOverride: selectedModel,
         missingVariablesOnly: opts.missingVariablesOnly,
+        forceReextract: opts.forceReextract,
         shouldPause: () => pauseRef.current,
         shouldAbort: () => abortRef.current,
         onProgress: (p) => setQueueProgress(p),
       });
 
       if (abortRef.current) {
-        onNotify("Cola de procesamiento detenida por el investigador.", "info");
+        onNotify("Extracción detenida por el investigador.", "info");
       } else {
-        onNotify(
-          `Extracción finalizada: ${finalProgress.succeeded} exitosos, ${finalProgress.failed} con error, ${finalProgress.skipped} omitidos.`,
-          finalProgress.failed > 0 ? "info" : "success"
-        );
+        const parts = [`${finalProgress.succeeded} completos`];
+        if (finalProgress.partial > 0) parts.push(`${finalProgress.partial} parciales`);
+        if (finalProgress.failed > 0) parts.push(`${finalProgress.failed} con error`);
+        if (finalProgress.skipped > 0) parts.push(`${finalProgress.skipped} omitidos`);
+
+        const tone =
+          finalProgress.failed > 0
+            ? "error"
+            : finalProgress.partial > 0
+              ? "info"
+              : "success";
+        onNotify(`Extracción finalizada: ${parts.join(", ")}.`, tone);
       }
     } finally {
       setIsRunningQueue(false);
@@ -527,20 +542,36 @@ export function IngestionModule({
     }
   }
 
+  const activeModelSummary = (() => {
+    if (demoModeEnabled || savedSettings?.useDemoMode) {
+      return "Modo de demostración (sin IA)";
+    }
+    if (modelsDiscovery?.authenticated && modelsDiscovery.connectionStatus === "connected") {
+      const preferredId =
+        savedSettings?.customModel?.trim() ||
+        savedSettings?.defaultModel?.trim() ||
+        modelsDiscovery.recommendedModel ||
+        "";
+      const found = modelsDiscovery.models.find((m) => m.id === preferredId);
+      return found ? `IA lista · ${found.displayName}` : `IA lista · ${preferredId || "Automático"}`;
+    }
+    if (modelsDiscovery?.connectionStatus === "configured_disconnected") {
+      return "IA sin conexión (revisá Configuración y Respaldo)";
+    }
+    return "IA no configurada (usará modo de demostración)";
+  })();
+
   return (
     <div className="space-y-5">
       {/* Título */}
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h2 className="text-xl font-semibold text-slate-900">
-            2. Ingesta por Lotes, Seudoanonimización y Extracción IA
+            2. Cargar historias clínicas
           </h2>
           <p className="mt-1 text-sm text-slate-600">
-            Carga archivos <code className="font-mono text-xs">.pdf</code>,{" "}
-            <code className="font-mono text-xs">.docx</code> o{" "}
-            <code className="font-mono text-xs">.txt</code> (procesamiento 100% local), agrupa
-            múltiples informes por paciente y enmascara datos filiatorios antes de invocar a
-            Gemini.
+            Cargá archivos PDF, Word o texto desde tu equipo, agrupá los informes de cada paciente
+            y ocultá automáticamente los datos identificatorios antes de analizar.
           </p>
         </div>
 
@@ -555,7 +586,7 @@ export function IngestionModule({
               }
               exportKeyTableCsv(study, patients);
               onNotify(
-                "Tabla Llave descargada localmente (mantener separada de la base científica).",
+                "Tabla Llave descargada en tu equipo (mantener separada de la base científica).",
                 "success"
               );
             }}
@@ -569,7 +600,7 @@ export function IngestionModule({
             onClick={() => setPasteModalOpen(true)}
           >
             <ClipboardPaste className="h-3.5 w-3.5" />
-            Pegar Texto HCD
+            Pegar historia clínica
           </Button>
         </div>
       </div>
@@ -625,12 +656,12 @@ export function IngestionModule({
             <UploadCloud className="h-9 w-9 text-sky-700" />
             <p className="mt-2 text-sm font-medium text-slate-800">
               {parsingFiles
-                ? "Procesando documentos localmente en tu navegador..."
-                : "Arrastra múltiples archivos aquí o haz clic para seleccionar"}
+                ? "Leyendo documentos en este equipo..."
+                : "Arrastrá múltiples archivos aquí o hacé clic para seleccionar"}
             </p>
             <p className="mt-1 text-xs text-slate-500">
-              Soporta PDF (texto seleccionable), Word (.docx) y texto plano (.txt). Nada se
-              sube a servidores externos al parsear.
+              Soporta PDF (con texto seleccionable), Word (.docx) y texto (.txt). Los archivos
+              se procesan únicamente en tu computadora.
             </p>
             <input
               ref={fileInputRef}
@@ -648,20 +679,16 @@ export function IngestionModule({
           </div>
         </Card>
 
-        {/* Capa de Privacidad / Seudoanonimización */}
+        {/* Protección de datos del paciente */}
         <Card className="p-4 lg:col-span-5">
           <div className="flex items-center gap-2">
             <Shield className="h-4 w-4 text-emerald-700" />
             <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-700">
-              Filtro Local de Seudoanonimización (Pre-IA)
+              Protección de datos del paciente
             </h3>
           </div>
           <p className="mt-1 text-xs text-slate-500">
-            Reemplaza automáticamente datos filiatorios por{" "}
-            <code className="rounded bg-amber-100 px-1 font-mono text-[11px] text-amber-900">
-              [REDACTADO]
-            </code>{" "}
-            antes de enviar texto al modelo de IA.
+            Oculta automáticamente DNI, nombres y teléfonos antes de analizar la historia.
           </p>
 
           <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
@@ -720,7 +747,7 @@ export function IngestionModule({
         </Card>
       </div>
 
-      {/* Panel de Motor de Extracción por Lotes (Batch Queue) */}
+      {/* Panel de Extracción automática de datos */}
       <Card className="p-4 border-sky-200 bg-sky-50/40">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2.5">
@@ -729,37 +756,18 @@ export function IngestionModule({
             </div>
             <div>
               <h3 className="text-sm font-semibold text-slate-900">
-                Motor de Extracción IA por Lotes (Structured Outputs)
+                Extracción automática de datos
               </h3>
               <p className="text-xs text-slate-600">
-                Manejo automático de rate-limit con backoff exponencial, citas verbatim y
-                soporte de re-extracción incremental.
+                Analiza cada historia y resalta la frase exacta de donde obtuvo cada dato.
+              </p>
+              <p className="mt-0.5 text-[11px] font-medium text-sky-800">
+                {activeModelSummary}
               </p>
             </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <select
-              value={selectedModel}
-              onChange={(e) => setSelectedModel(e.target.value as GeminiModel)}
-              disabled={isRunningQueue}
-              className="rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-800"
-            >
-              {savedSettings?.customModel?.trim() &&
-                !GEMINI_MODEL_PRESETS.some(
-                  (p) => p.id === savedSettings.customModel.trim()
-                ) && (
-                  <option value={savedSettings.customModel.trim()}>
-                    {savedSettings.customModel.trim()} (Personalizado)
-                  </option>
-                )}
-              {GEMINI_MODEL_PRESETS.map((preset) => (
-                <option key={preset.id} value={preset.id}>
-                  {preset.label}
-                </option>
-              ))}
-            </select>
-
             {!isRunningQueue ? (
               <>
                 <Button
@@ -771,7 +779,8 @@ export function IngestionModule({
                           p.extractionStatus === "idle" ||
                           p.extractionStatus === "error" ||
                           p.extractionStatus === "partial"
-                      )
+                      ),
+                      { forceReextract: false }
                     )
                   }
                   disabled={patients.length === 0 || variables.length === 0}
@@ -783,14 +792,16 @@ export function IngestionModule({
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => launchExtractionQueue(errorPatients)}
+                  onClick={() =>
+                    launchExtractionQueue(errorPatients, { forceReextract: true })
+                  }
                   disabled={errorPatients.length === 0 || variables.length === 0}
                   className={
                     errorPatients.length > 0
                       ? "border-rose-300 bg-rose-50 text-rose-700 hover:bg-rose-100"
                       : undefined
                   }
-                  title="Reprocesa únicamente los pacientes en estado Error sin modificar los ya extraídos"
+                  title="Reprocesa únicamente los pacientes con error sin modificar los ya validados"
                 >
                   <RefreshCw className="h-3.5 w-3.5" />
                   Reintentar solo errores ({errorPatients.length})
@@ -803,7 +814,7 @@ export function IngestionModule({
                     onClick={() =>
                       launchExtractionQueue(patients, { missingVariablesOnly: true })
                     }
-                    title="Extrae únicamente las variables agregadas al diccionario después de la última corrida"
+                    title="Extrae únicamente las variables nuevas agregadas después de la última corrida"
                   >
                     <RefreshCw className="h-3.5 w-3.5" />
                     Solo Variables Nuevas ({totalPendingNewColumns})
@@ -813,10 +824,13 @@ export function IngestionModule({
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => launchExtractionQueue(patients)}
+                  onClick={() =>
+                    launchExtractionQueue(patients, { forceReextract: true })
+                  }
                   disabled={patients.length === 0 || variables.length === 0}
+                  title="Vuelve a analizar casos no validados respetando siempre las correcciones manuales"
                 >
-                  Re-extraer Toda la Cohorte ({patients.length})
+                  Re-extraer Cohorte ({patients.length})
                 </Button>
               </>
             ) : (
@@ -859,19 +873,26 @@ export function IngestionModule({
             <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
               <span className="font-medium text-slate-800">
                 {queueProgress.currentPatientCode
-                  ? `Procesando ${queueProgress.currentPatientCode}...`
-                  : "Cola completada"}{" "}
+                  ? `Analizando ${queueProgress.currentPatientCode}...`
+                  : "Extracción finalizada"}{" "}
                 ({queueProgress.completed}/{queueProgress.total})
               </span>
               <div className="flex items-center gap-2">
                 {queueProgress.lastMode && (
                   <Badge variant={queueProgress.lastMode === "gemini" ? "blue" : "amber"}>
-                    Modo: {queueProgress.lastMode === "gemini" ? "Gemini API" : "Demo Local"}
+                    {queueProgress.lastMode === "gemini"
+                      ? "Extracción estructurada IA"
+                      : "Modo de demostración"}
                   </Badge>
                 )}
                 <span className="text-emerald-700 font-medium">
                   ✓ {queueProgress.succeeded}
                 </span>
+                {queueProgress.partial > 0 && (
+                  <span className="text-amber-700 font-medium">
+                    ⚠ {queueProgress.partial}
+                  </span>
+                )}
                 {queueProgress.failed > 0 && (
                   <span className="text-rose-600 font-medium">
                     ✕ {queueProgress.failed}
@@ -896,7 +917,7 @@ export function IngestionModule({
             {queueProgress.retryMessage && (
               <div className="flex items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-900">
                 <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600" />
-                <span className="font-mono">{queueProgress.retryMessage}</span>
+                <span>{queueProgress.retryMessage}</span>
               </div>
             )}
             {queueProgress.lastWarning && (
@@ -916,7 +937,7 @@ export function IngestionModule({
           </h3>
           {patients.length > 0 && (
             <Button size="sm" variant="outline" onClick={() => onGoToValidation()}>
-              Ir a Paso 3: Validar Casos →
+              Ir a Paso 3: Revisar y validar casos →
             </Button>
           )}
         </div>
@@ -936,6 +957,11 @@ export function IngestionModule({
             {patients.map((patient) => {
               const pDocs = docsByPatient.get(patient.id) || [];
               const missingCols = missingColsByPatient.get(patient.id) ?? 0;
+              const scannedDocs = pDocs.filter((d) => isDocumentLowTextPdf(d));
+              const formattedError = formatStoredErrorForDisplay(
+                patient.extractionError,
+                patient.extractionErrorDetail
+              );
 
               return (
                 <div key={patient.id} className="p-4 hover:bg-slate-50/60">
@@ -957,17 +983,26 @@ export function IngestionModule({
                           Extraído
                         </Badge>
                       )}
+                      {patient.extractionStatus === "partial" && (
+                        <Badge variant="amber">
+                          <AlertTriangle className="h-3 w-3" />
+                          Extracción parcial
+                        </Badge>
+                      )}
                       {patient.extractionStatus === "processing" && (
-                        <Badge variant="blue">Procesando IA...</Badge>
+                        <Badge variant="blue">Analizando...</Badge>
                       )}
                       {patient.extractionStatus === "queued" && (
-                        <Badge variant="slate">En cola</Badge>
+                        <Badge variant="slate">En espera</Badge>
                       )}
                       {patient.extractionStatus === "idle" && (
                         <Badge variant="amber">Pendiente de extracción</Badge>
                       )}
                       {patient.extractionStatus === "error" && (
-                        <Badge variant="red">Error</Badge>
+                        <Badge variant="red">No completado</Badge>
+                      )}
+                      {patient.validationStatus === "validated" && (
+                        <Badge variant="green">Validado (protegido)</Badge>
                       )}
                       {missingCols > 0 && patient.lastExtractedAt && (
                         <Badge variant="purple">
@@ -981,7 +1016,11 @@ export function IngestionModule({
                         variant="outline"
                         size="xs"
                         disabled={isRunningQueue || variables.length === 0}
-                        onClick={() => launchExtractionQueue([patient])}
+                        onClick={() =>
+                          launchExtractionQueue([patient], {
+                            forceReextract: Boolean(patient.lastExtractedAt),
+                          })
+                        }
                       >
                         <Cpu className="h-3 w-3" />
                         {patient.lastExtractedAt ? "Re-extraer" : "Extraer"}
@@ -991,7 +1030,7 @@ export function IngestionModule({
                         size="xs"
                         onClick={() => onGoToValidation(patient.id)}
                       >
-                        Validar
+                        Revisar
                       </Button>
                       <button
                         type="button"
@@ -1004,22 +1043,65 @@ export function IngestionModule({
                     </div>
                   </div>
 
-                  {patient.extractionError && (
-                    <p className="mt-2 rounded bg-rose-50 px-2.5 py-1.5 text-xs text-rose-700 border border-rose-200">
-                      {patient.extractionError}
-                    </p>
+                  {/* Alerta clara si algún PDF del paciente parece escaneado sin texto seleccionable */}
+                  {scannedDocs.length > 0 && (
+                    <div className="mt-2 flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                      <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600 mt-0.5" />
+                      <div>
+                        <p className="font-semibold">{SCANNED_PDF_WARNING}</p>
+                        <p className="mt-0.5 text-[11px] text-amber-800">
+                          Archivo(s):{" "}
+                          <strong>{scannedDocs.map((d) => d.filename).join(", ")}</strong>. El
+                          documento original se conservó, pero no se realizó reconocimiento de
+                          texto (OCR) ni se enviará texto vacío a la IA.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Error en español humano con detalle técnico colapsable */}
+                  {formattedError && (
+                    <div
+                      className={`mt-2 rounded-md border px-3 py-2 text-xs ${
+                        patient.extractionStatus === "partial"
+                          ? "border-amber-200 bg-amber-50 text-amber-900"
+                          : "border-rose-200 bg-rose-50 text-rose-800"
+                      }`}
+                    >
+                      <p className="font-medium">{formattedError.userMessage}</p>
+                      {formattedError.technicalDetail && (
+                        <details className="mt-1.5 text-[11px]">
+                          <summary className="cursor-pointer font-medium opacity-80 hover:opacity-100 select-none">
+                            Ver detalle técnico
+                          </summary>
+                          <pre className="mt-1 whitespace-pre-wrap break-all rounded bg-white/70 p-2 font-mono text-[10px] text-slate-700 border border-slate-200">
+                            {formattedError.technicalDetail}
+                          </pre>
+                        </details>
+                      )}
+                    </div>
                   )}
 
                   {/* Documentos agrupados del paciente */}
                   <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                    {pDocs.map((doc) => (
+                    {pDocs.map((doc) => {
+                      const docLowText = isDocumentLowTextPdf(doc);
+                      return (
                       <div
                         key={doc.id}
-                        className="flex items-center justify-between gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs"
+                        className={`flex items-center justify-between gap-2 rounded-md border px-3 py-2 text-xs ${
+                          docLowText
+                            ? "border-amber-300 bg-amber-50/40"
+                            : "border-slate-200 bg-white"
+                        }`}
                       >
                         <div className="min-w-0">
                           <div className="flex items-center gap-1.5">
-                            <FileText className="h-3.5 w-3.5 shrink-0 text-sky-700" />
+                            <FileText
+                              className={`h-3.5 w-3.5 shrink-0 ${
+                                docLowText ? "text-amber-600" : "text-sky-700"
+                              }`}
+                            />
                             <span className="truncate font-medium text-slate-800">
                               {doc.filename}
                             </span>
@@ -1027,15 +1109,21 @@ export function IngestionModule({
                           <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500">
                             <span>{DOCUMENT_CATEGORY_LABELS[doc.category]}</span>
                             <span>·</span>
-                            <span
-                              className={
-                                doc.redactionCount > 0
-                                  ? "text-emerald-700 font-medium"
-                                  : "text-slate-500"
-                              }
-                            >
-                              {doc.redactionCount} redacción(es)
-                            </span>
+                            {docLowText ? (
+                              <Badge variant="amber" className="text-[10px] py-0">
+                                Sin texto seleccionable
+                              </Badge>
+                            ) : (
+                              <span
+                                className={
+                                  doc.redactionCount > 0
+                                    ? "text-emerald-700 font-medium"
+                                    : "text-slate-500"
+                                }
+                              >
+                                {doc.redactionCount} dato(s) oculto(s)
+                              </span>
+                            )}
                             {doc.redactionConfirmed && (
                               <Badge variant="green" className="text-[10px] py-0">
                                 Confirmado
@@ -1048,7 +1136,7 @@ export function IngestionModule({
                             type="button"
                             onClick={() => setPreviewDoc(doc)}
                             className="rounded p-1 text-slate-500 hover:bg-sky-50 hover:text-sky-700 cursor-pointer"
-                            title="Vista previa de texto redactado"
+                            title="Vista previa del texto protegido"
                           >
                             <Eye className="h-3.5 w-3.5" />
                           </button>
@@ -1062,7 +1150,8 @@ export function IngestionModule({
                           </button>
                         </div>
                       </div>
-                    ))}
+                      );
+                    })}
 
                     <button
                       type="button"
@@ -1174,7 +1263,7 @@ export function IngestionModule({
             >
               Cancelar
             </Button>
-            <Button type="submit">Guardar y Redactar PII</Button>
+            <Button type="submit">Guardar y proteger datos</Button>
           </div>
         </form>
       </Modal>

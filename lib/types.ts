@@ -37,36 +37,29 @@ export type DocumentCategory =
 
 export type GeminiModel = string;
 
-export const DEFAULT_GEMINI_MODEL = "gemini-3.8-flash";
+export interface DiscoveredGeminiModel {
+  id: string;
+  displayName: string;
+  description?: string;
+}
 
-export const GEMINI_MODEL_PRESETS = [
-  {
-    id: "gemini-3.8-flash",
-    label: "gemini-3.8-flash (Recomendado · Lotes grandes / Rápido)",
-    shortLabel: "3.8 Flash",
-  },
-  {
-    id: "gemini-3.8-pro",
-    label: "gemini-3.8-pro (Precisión máxima / Casos complejos)",
-    shortLabel: "3.8 Pro",
-  },
-] as const;
+export type AiConnectionStatus =
+  | "connected"
+  | "configured_disconnected"
+  | "not_configured";
 
-export const DEPRECATED_GEMINI_MODELS = new Set([
-  "gemini-2.5-flash",
-  "gemini-2.5-pro",
-]);
-
-/**
- * Normaliza y migra automáticamente modelos deprecados (2.5 Flash / 2.5 Pro)
- * hacia gemini-3.8-flash, preservando cualquier modelo válido o personalizado.
- */
-export function normalizeGeminiModel(model?: string | null): string {
-  const trimmed = (model ?? "").trim();
-  if (!trimmed || DEPRECATED_GEMINI_MODELS.has(trimmed)) {
-    return DEFAULT_GEMINI_MODEL;
-  }
-  return trimmed;
+export interface ModelsDiscoveryResponse {
+  hasServerKey: boolean;
+  hasManualKey: boolean;
+  keySource: "manual" | "server" | "none";
+  authenticated: boolean;
+  connectionStatus: AiConnectionStatus;
+  models: DiscoveredGeminiModel[];
+  recommendedModel: string | null;
+  fallbackModel: string | null;
+  error?: string;
+  technicalDetail?: string;
+  checkedAt: string;
 }
 
 export interface RedactionRuleConfig {
@@ -113,6 +106,7 @@ export interface Patient {
   validationStatus: ValidationStatus;
   extractionStatus: PatientExtractionStatus;
   extractionError?: string;
+  extractionErrorDetail?: string;
   researcherNotes: string;
   lastExtractedAt?: string;
   createdAt: string;
@@ -132,6 +126,8 @@ export interface ClinicalDocument {
   redactionCount: number;
   redactionSummary: Record<string, number>;
   redactionConfirmed: boolean;
+  isLowTextPdf?: boolean;
+  extractedCharCount?: number;
   uploadedAt: string;
 }
 
@@ -162,8 +158,10 @@ export interface AppSetting {
 export interface AppSettingsState {
   geminiApiKey: string;
   defaultModel: GeminiModel;
+  fallbackModel: GeminiModel;
   customModel: string;
   rateLimitDelayMs: number;
+  useDemoMode: boolean;
 }
 
 export interface VariableTemplateBlock {
@@ -205,6 +203,10 @@ export interface GeminiExtractionResponse {
   mode: "gemini" | "mock";
   modelUsed: string;
   warning?: string;
+  modelAutoUpdated?: boolean;
+  resolvedModel?: string;
+  fallbackUsed?: boolean;
+  omittedVariables?: string[];
 }
 
 export const VARIABLE_TYPE_LABELS: Record<VariableType, string> = {

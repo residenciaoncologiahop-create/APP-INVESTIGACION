@@ -1,5 +1,75 @@
 import type { RedactionRuleConfig } from "./types";
 
+export const NEUTRAL_DOCUMENT_ID_REGEX = /^DOC-\d{2,}$/i;
+
+export function formatNeutralDocumentId(index: number): string {
+  const safeIndex = Number.isFinite(index) && index >= 0 ? Math.floor(index) : 0;
+  return `DOC-${String(safeIndex + 1).padStart(2, "0")}`;
+}
+
+export function isNeutralDocumentId(value?: string | null): boolean {
+  if (!value) return false;
+  return NEUTRAL_DOCUMENT_ID_REGEX.test(value.trim());
+}
+
+export function toNeutralDocumentId(
+  filename: string | undefined | null,
+  fallbackIndex: number
+): string {
+  if (filename && isNeutralDocumentId(filename)) {
+    return filename.trim().toUpperCase();
+  }
+  return formatNeutralDocumentId(fallbackIndex);
+}
+
+export const MINIMUM_REDACTION_RULE_LABELS = {
+  maskDni: "DNI / CUIL / Documento",
+  maskNames: "Nombres en encabezados",
+  maskRecordIds: "N° Historia Clínica / Afiliado",
+} as const;
+
+export type MinimumRedactionRuleKey = keyof typeof MINIMUM_REDACTION_RULE_LABELS;
+
+export const MINIMUM_REQUIRED_REDACTION_RULES: readonly MinimumRedactionRuleKey[] = [
+  "maskDni",
+  "maskNames",
+  "maskRecordIds",
+];
+
+/**
+ * Devuelve las reglas mínimas de identificación personal que faltan activar.
+ * Nota: este conjunto mínimo actúa como barrera preventiva básica mediante regex
+ * y NO garantiza anonimización completa; siempre requiere revisión humana previa.
+ */
+export function getMissingMinimumRedactionRules(
+  rules?: RedactionRuleConfig | null
+): MinimumRedactionRuleKey[] {
+  if (!rules) return [...MINIMUM_REQUIRED_REDACTION_RULES];
+  return MINIMUM_REQUIRED_REDACTION_RULES.filter((key) => rules[key] !== true);
+}
+
+/**
+ * Verifica si está habilitado el conjunto mínimo obligatorio de reglas de
+ * identificación personal (DNI/CUIL, nombres en encabezados y N° de historia clínica).
+ * Las expresiones regulares reducen la exposición de datos filiatorios pero no
+ * garantizan anonimización completa por sí solas.
+ */
+export function isRedactionEnabled(rules?: RedactionRuleConfig | null): boolean {
+  return getMissingMinimumRedactionRules(rules).length === 0;
+}
+
+export function hasUsableRedactedText(
+  redactedText: unknown,
+  minChars = 30
+): boolean {
+  if (typeof redactedText !== "string") return false;
+  const cleaned = redactedText
+    .replace(/---\s*Página siguiente\s*---/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return cleaned.length >= minChars;
+}
+
 export interface RedactionResult {
   redactedText: string;
   totalRedactions: number;
